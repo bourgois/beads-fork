@@ -2749,15 +2749,36 @@ func initSchemaOnDBWithRetryAndGateBootstrapHeal(
 	// Must exceed schema.MigrateUpWithLock's 5s GET_LOCK wait so a contended
 	// schema migration can time out once and still retry.
 	schemaBO.MaxElapsedTime = serverRetryMaxElapsed
+
+	// The gate authorizes this LOGICAL open, once — it is not a per-attempt
+	// re-check. Two things make re-checking wrong (gastownhall/beads#5012
+	// shape, caught by the fresh-bootstrap heal tests):
+	//
+	//   - an attempt that dies mid-pass leaves the schema cursor ADVANCED, so
+	//     a re-check no longer sees the fresh database it allowed a moment
+	//     ago. It sees "existing database, migrations pending" and refuses the
+	//     very migration it just authorized, stranding the open half-migrated;
+	//   - fresh-bootstrap heal authority is issued only to the open that won
+	//     the bare CREATE for this exact database incarnation, so it is
+	//     standing proof that creating it was consent for its schema. That
+	//     proof survives a retry; a version read does not.
+	//
+	// Same argument, same shape as the proxied path's skip in
+	// schema.MigrateUpWithLock. Only the ALLOW is latched: a gate whose probes
+	// hit a transient startup/catalog race has not decided anything yet, and
+	// is still retried below.
+	gateSatisfied := bootstrapHeal != nil
+
 	var applied int
 	err := backoff.Retry(func() error {
-		if gate != nil {
+		if gate != nil && !gateSatisfied {
 			if gateErr := gate(ctx, db); gateErr != nil {
 				if !schema.IsRemoteMigrateGateError(gateErr) && isRetryableError(gateErr) {
 					return gateErr
 				}
 				return backoff.Permanent(gateErr)
 			}
+			gateSatisfied = true
 		}
 		var schemaErr error
 		applied, schemaErr = initSchemaOnDBWithBootstrapHeal(ctx, db, bootstrapHeal, endpoint)
@@ -2770,6 +2791,56 @@ func initSchemaOnDBWithRetryAndGateBootstrapHeal(
 		return nil
 	}, backoff.WithContext(schemaBO, ctx))
 	return applied, err
+}
+
+// sharedServerDatabase reports whether this store's database is served to bd
+// clients beyond this workspace — the condition the #5920 consent gate exists
+// for, since migrating promotes the schema version for every one of them at
+// once and locks out any still on an older bd.
+//
+// The line is who owns the server's lifecycle, which doltserver already
+// resolves for the auto-start decision:
+//
+//   - bd auto-started this server for THIS workspace (ServerModeOwned): the
+//     database is this workspace's own, the way an embedded database is, and
+//     bd migrates it on open exactly as it always has. Refusing here would
+//     leave a single-user workspace unable to migrate itself, and would break
+//     the #4566/#5781 dirty-table recovery, whose whole shape is
+//     refuse-then-commit-then-migrate on a bd-owned local server.
+//   - anything else — shared-server mode, an explicit dolt_server_port in
+//     metadata.json, host inference, a caller with no workspace at all —
+//     is someone else's server. Fail closed: without a workspace to prove
+//     ownership from, assume the database is shared.
+//
+// This narrows #6048's original predicate, which treated every DoltStore as
+// shared on the reasoning that "a sql-server accepts co-resident clients by
+// construction". True in the abstract, but it swept in bd's own
+// single-workspace servers and so refused migrations that no other client
+// could ever observe. The #5920 report, and the regression test for it, are
+// both the external-server shape this keeps gated.
+// Every signal it reads is one that is set on EVERY open. Deliberately absent
+// are cfg.AutoStart, cfg.ServerMode and s.autoStartedServerDir, which all name
+// the right idea but are populated only by the CLI (or, for the last, only
+// under BEADS_TEST_MODE): a library caller pointed at a genuinely shared
+// server leaves them false, and reading them would silently ungate it.
+func sharedServerDatabase(cfg *Config) bool {
+	// No workspace to prove ownership from — a bare dolt.New pointed at some
+	// endpoint. Fail closed.
+	if cfg == nil || cfg.BeadsDir == "" {
+		return true
+	}
+	// Somebody else's server by construction: a host that is not this
+	// machine, a TLS endpoint (Hosted Dolt), or a unix socket — bd's own
+	// auto-start only ever creates a local TCP listener.
+	if !isLocalHost(cfg.ServerHost) || cfg.ServerTLS || cfg.ServerSocket != "" {
+		return true
+	}
+	// The one shared topology that is otherwise indistinguishable from an
+	// owned one: same machine, same TCP shape, one server for many workspaces.
+	if doltserver.IsSharedServerMode() {
+		return true
+	}
+	return doltserver.ResolveServerMode(cfg.BeadsDir) != doltserver.ServerModeOwned
 }
 
 func (s *DoltStore) initSchema(ctx context.Context, bootstrapHeal *schema.FreshBootstrapHealCapability) (int, error) {
@@ -2820,14 +2891,16 @@ func (s *DoltStore) initSchema(ctx context.Context, bootstrapHeal *schema.FreshB
 		// depend on that external guard alone.
 		ReadOnly: s.readOnly,
 	}
-	// The shared variant (#5920): a DoltStore is always a sql-server client,
-	// and a sql-server accepts co-resident clients by construction — that is
-	// what distinguishes it from the flock-guarded single-writer embedded
-	// store. So this open must never promote the schema cursor on its own,
-	// with or without a remote. Auto-started servers included: other bd
-	// processes attach to them while they run, which is the exact shape #5920
-	// was reported on.
+	// #5920: on a database served to OTHER workspaces' bd clients, migrating
+	// promotes the schema for all of them at once, so this open must not do it
+	// unprompted. On a server whose lifecycle bd owns for this one workspace,
+	// the pre-existing contract stands and the open migrates (see
+	// sharedServerDatabase).
 	gate := func(ctx context.Context, db *sql.DB) error {
+		if !sharedServerDatabase(s.cfg) {
+			return schema.CheckRemoteMigrateGateForRemoteWithRemoteCheckAndAdopt(
+				ctx, db, s.remote, s.hasPersistedCLIRemote, adopt)
+		}
 		return schema.CheckSharedStoreMigrateGate(ctx, db, s.remote, s.hasPersistedCLIRemote, adopt)
 	}
 	applied, err := initSchemaOnDBWithRetryAndGateBootstrapHeal(ctx, migDB, gate, bootstrapHeal, s.serverEndpoint)
