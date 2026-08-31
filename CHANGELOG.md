@@ -848,12 +848,6 @@ which dumps the entire release history.)
   `ParentID`. Programmatic callers that set them got unfiltered results back and
   no error — a full list where a scoped one was asked for.
 
-<!-- PROVISIONAL: the four entries below are the proposed changelog lines from
-     #6055 and #6056, which were still OPEN when this rollup was written.
-     The RC is gated on both merging, so this fence comes off at RC-prep time:
-     drop these two comment lines once they have landed, or delete the whole
-     block (entries included) if either PR does not land. -->
-
 - Proxied-server mode (and `bd serve`) ran schema migrations on every store
   open without consulting any migration gate, so an upgraded client silently
   migrated a shared database — including from read-only commands. The gate now
@@ -876,8 +870,6 @@ which dumps the entire release history.)
   set; it reports the pending migration instead. Both gates key on the directory
   doctor was pointed at, not just the one it was launched in. Diagnosis itself
   keeps working under a freeze.
-
-<!-- END PROVISIONAL -->
 
 ### Security
 
