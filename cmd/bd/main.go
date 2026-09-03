@@ -1400,6 +1400,24 @@ var rootCmd = &cobra.Command{
 		// reached, and that later call has no preview awareness — so a
 		// preview on a frozen town still exits 1 there, fail-closed, same as
 		// strict --readonly already blocks `create --dry-run` today.
+		// If the operator passed --force on `bd migrate` or `bd migrate schema`,
+		// set the programmatic gate override before both autoMigrateOnVersionBump
+		// and the main store open — both open their own store connections and the
+		// gate fires on each. Resolved BEFORE the freeze check below because
+		// --force also names this process the designated migrator under a
+		// MIGRATION-FREEZE: the one process allowed through a freeze is the one
+		// that is there to do the migration.
+		forcedMigrate := isForcedMigrate(cmd)
+		if forcedMigrate {
+			if name := forcedMigratePreviewFlag(cmd); name != "" {
+				return HandleError("--force cannot be combined with --%s: opening the store with the gate overridden applies pending migrations before the preview runs", name)
+			}
+		}
+		// Unconditional set-or-clear keeps the overrides self-clearing should the
+		// root command ever be re-run in-process (tests, a future server mode).
+		schema.SetForceAllowRemoteMigrate(forcedMigrate)
+		migrateForceOverridesFreeze = forcedMigrate
+
 		if !useReadOnly {
 			CheckMigrationFreeze(strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" "))
 		}
@@ -1414,11 +1432,18 @@ var rootCmd = &cobra.Command{
 		// freeze the town, seed .local_version with a stale version, run
 		// `bd list` — exit 0 (correct, it's a read), but .local_version was
 		// silently rewritten mid-freeze anyway. Skip both calls under an
-		// active freeze without blocking the read itself. Short-circuits on
-		// !policy.runMaintenance (strict --readonly) so the IsFrozen/
-		// freezeRoot walk isn't paid on that path, where these
-		// calls are already skipped for an unrelated reason.
-		frozenForMaintenance := policy.runMaintenance && migration.IsFrozen(freezeRoot())
+		// active freeze without blocking the read itself.
+		//
+		// The sentinel is read once here and handed to the schema layer as
+		// well: the CLI check above refuses writes, but a read's store open
+		// still runs schema.MigrateUp, and without SetMigrationFrozen a
+		// `bd list` under an active freeze migrated the database anyway
+		// (measured: cursor 60 -> 66 with the sentinel present). The stat is
+		// paid on every path now, including strict --readonly, because the
+		// store-open gate needs the answer there too.
+		frozen := migration.IsFrozen(freezeRoot())
+		schema.SetMigrationFrozen(frozen)
+		frozenForMaintenance := policy.runMaintenance && frozen
 
 		// Track bd version changes unless strict readonly forbids repository mutation.
 		// Best-effort tracking - failures are silent.
@@ -1433,20 +1458,6 @@ var rootCmd = &cobra.Command{
 				trackBdVersion()
 			}
 		}
-
-		// If the operator passed --force on `bd migrate` or `bd migrate schema`,
-		// set the programmatic gate override before both autoMigrateOnVersionBump
-		// and the main store open — both open their own store connections and the
-		// gate fires on each.
-		forcedMigrate := isForcedMigrate(cmd)
-		if forcedMigrate {
-			if name := forcedMigratePreviewFlag(cmd); name != "" {
-				return HandleError("--force cannot be combined with --%s: opening the store with the gate overridden applies pending migrations before the preview runs", name)
-			}
-		}
-		// Unconditional set-or-clear keeps the override self-clearing should the
-		// root command ever be re-run in-process (tests, a future server mode).
-		schema.SetForceAllowRemoteMigrate(forcedMigrate)
 
 		// Auto-migrate database on version bump (bd-jgxi).
 		// Runs for ALL non-preview commands (including read-only ones) because
