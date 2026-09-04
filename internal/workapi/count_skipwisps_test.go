@@ -15,7 +15,7 @@ import (
 // IncludeEphemeral existed the only way was IncludeInfra, which ALSO drops
 // template rows of the named type: one silent undercount traded for another.
 //
-// The default is upstream's and must stay byte-identical: durable plane only.
+// The default before this change must stay byte-identical: durable plane only.
 func TestBuildCountFilter_IncludeEphemeral(t *testing.T) {
 	cfg := ListConfig{}
 
@@ -30,7 +30,7 @@ func TestBuildCountFilter_IncludeEphemeral(t *testing.T) {
 			wantSkipWisps: true,
 		},
 		{
-			name:          "a named type alone stays durable-only (upstream's default)",
+			name:          "a named type alone stays durable-only (the default before this change)",
 			in:            issueops.CountRequest{IssueType: "task"},
 			wantSkipWisps: true,
 		},
@@ -73,11 +73,11 @@ func TestBuildCountFilter_IncludeEphemeral(t *testing.T) {
 // exempts infra types) while count does not, so `bd count --type agent` answers
 // 0 where `bd list --type agent` returns rows.
 //
-// That divergence is UPSTREAM'S and predates the flag — upstream's count arm is
-// a bare `else { SkipWisps = true }`, so it answers 0 for an infra type too. It
-// is pinned here rather than fixed because fixing it inside the fork would
-// re-add the divergence this change exists to remove; it belongs upstream. The
-// fork's old wide default happened to mask it, which is why it surfaces now.
+// That divergence predates the flag — the count arm is a bare `else {
+// SkipWisps = true }`, so it answers 0 for an infra type with or without this
+// change. It is pinned here, not fixed: the fix is a separate decision about
+// what naming an infra type should admit, and this change deliberately alters
+// nothing about the default arm.
 //
 // It asserts the ABSOLUTE expected value as well as the agreement. Agreement
 // alone is satisfied by a regression that turns the flag into a no-op on BOTH
