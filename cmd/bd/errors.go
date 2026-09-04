@@ -174,7 +174,7 @@ func CheckReadonly(operation string) {
 //     doesn't block it either), so it cannot inherit the freeze check from
 //     caller 1 and needs its own explicit call.
 func CheckMigrationFreeze(operation string) {
-	root := freezeRoot()
+	root, inTown := freezeRootAndScope()
 	if !migration.IsFrozen(root) {
 		return
 	}
@@ -192,7 +192,6 @@ func CheckMigrationFreeze(operation string) {
 	// file the operator put there by hand and removes the same way. Telling a
 	// non-Gas-Town user to run `gt migrate thaw` would name a binary they do
 	// not have, for a town that does not exist.
-	inTown := findTownRoot() != ""
 	subject, remedy := "workspace", "remove "+migration.FilePath(root)
 	if inTown {
 		subject, remedy = "town", "gt migrate thaw"

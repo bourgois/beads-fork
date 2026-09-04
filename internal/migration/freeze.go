@@ -1,7 +1,13 @@
 // Package migration provides read-side access to the MIGRATION-FREEZE
-// write-freeze sentinel: a file whose presence makes bd refuse writes and skip
-// its own store-touching side effects (version tracking, auto-migration,
-// auto-import) until it is removed.
+// write-freeze sentinel: a file whose presence makes bd refuse write commands
+// and skip the root pre-run's own side effects (version tracking, the
+// version-bump auto-migrate, auto-import) until it is removed.
+//
+// It stops WRITES, not schema migration. A read command is let through so
+// diagnosis keeps working, and its store open still runs schema.MigrateUp —
+// nothing under internal/storage consults this sentinel. A behind database
+// read under an active freeze is migrated by that read. Closing that gap
+// belongs at the MigrateUp chokepoint and is a separate change.
 //
 // It has two homes, resolved by cmd/bd's freezeRoot. In a Gas Town workspace
 // the sentinel sits at the town root and is created and removed by the gt CLI
