@@ -1026,7 +1026,17 @@ func commentOutYamlKey(content, key string) (string, error) {
 		result = append(result, line)
 	}
 
-	return strings.Join(result, "\n"), nil
+	// Preserve the document's trailing newline. strings.Split on a string
+	// ending in "\n" yields a final empty element, and any line this function
+	// appends after that point -- or any path that rebuilds `result` without it
+	// -- drops it, so an unset also wrote a no-newline-at-end-of-file change on
+	// top of the line it meant to comment out. That happened even for a key the
+	// document does not contain, i.e. when nothing was edited at all.
+	out := strings.Join(result, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
 }
 
 // nestedKeyWalk tracks how much of a dotted key a line-by-line scan has matched
