@@ -21,14 +21,23 @@ func TestCommentOutYamlKeyPreservesTheTrailingNewline(t *testing.T) {
 		{"flat dotted key present", "issue_prefix: vp\ndolt.mode: server\n", "dolt.mode"},
 		{"single-segment key present", "issue_prefix: vp\nexport.auto: true\n", "issue_prefix"},
 		{"key absent — nothing is edited", "issue_prefix: vp\n", "dolt.mode"},
+
+		// A blank line at the end of a YAML file is an ordinary shape, and
+		// bufio.Scanner collapses the whole run rather than just the final
+		// newline. Asserting only that SOME trailing newline survived cannot
+		// see that: the output still ends in "\n", one short.
+		{"ends in a blank line", "issue_prefix: vp\ndolt:\n  mode: server\n\n", "dolt.mode"},
+		{"ends in two blank lines", "issue_prefix: vp\ndolt:\n  mode: server\n\n\n", "dolt.mode"},
+		{"ends in a blank line, key absent", "issue_prefix: vp\nother: x\n\n", "dolt.mode"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := commentOutYamlKey(tc.content, tc.key)
 			if err != nil {
 				t.Fatalf("commentOutYamlKey: %v", err)
 			}
-			if !strings.HasSuffix(out, "\n") {
-				t.Errorf("trailing newline dropped:\nin:  %q\nout: %q", tc.content, out)
+			want := tc.content[len(strings.TrimRight(tc.content, "\n")):]
+			if got := out[len(strings.TrimRight(out, "\n")):]; got != want {
+				t.Errorf("trailing newline run = %q, want %q:\nin:  %q\nout: %q", got, want, tc.content, out)
 			}
 		})
 	}
@@ -54,7 +63,9 @@ func TestUnsetThroughTheFileKeepsTheTrailingNewline(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(beadsDir, "config.yaml")
-	const body = "issue_prefix: vp\nexport.auto: true\ndolt:\n  mode: server\n"
+	// The file ends in a blank line, the shape a single appended "\n" does not
+	// restore.
+	const body = "issue_prefix: vp\nexport.auto: true\ndolt:\n  mode: server\n\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +77,8 @@ func TestUnsetThroughTheFileKeepsTheTrailingNewline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(string(after), "\n") {
-		t.Errorf("unset left the file without its trailing newline:\n%q", string(after))
+	want := body[len(strings.TrimRight(body, "\n")):]
+	if got := string(after)[len(strings.TrimRight(string(after), "\n")):]; got != want {
+		t.Errorf("unset rewrote the end of the file: trailing run %q, want %q\n%q", got, want, string(after))
 	}
 }
