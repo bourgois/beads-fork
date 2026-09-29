@@ -114,6 +114,7 @@ func TestCountForwardsEveryDocumentedParameter(t *testing.T) {
 		"no_assignee":       {"true"},
 		"no_labels":         {"true"},
 		"metadata_field":    {"team=platform", "env=prod"},
+		"has_metadata_key":  {"audit_ref"},
 		"include_infra":     {"true"},
 		"include_ephemeral": {"true"},
 	}.Encode())
@@ -164,6 +165,7 @@ func TestCountForwardsEveryDocumentedParameter(t *testing.T) {
 		NoAssignee:     true,
 		NoLabels:       true,
 		MetadataFields: map[string]string{"team": "platform", "env": "prod"},
+		HasMetadataKey: "audit_ref",
 
 		IncludeInfra:     true,
 		IncludeEphemeral: true,
@@ -542,9 +544,10 @@ func TestCountParametersMatchTheHandler(t *testing.T) {
 // It also keeps the role's group refusal unreachable from the wire: the
 // handler refuses an unknown group at the edge. Metadata validation is a
 // separate path. An invalid key reaches BuildCountFilter, whose role refusal
-// failReadErr classifies as a 400 on `metadata_field`. This test guards only the
-// group vocabulary; if that enum and the role's constants diverged, a value the
-// server accepted and the role refused would arrive as an unclassified 500.
+// failReadErr classifies as a 400 on `metadata_field` or `has_metadata_key`.
+// This test guards only the group vocabulary; if that enum and the role's
+// constants diverged, a value the server accepted and the role refused would
+// arrive as an unclassified 500.
 func TestCountGroupEnumMatchesTheRolesVocabulary(t *testing.T) {
 	doc := loadSpec(t)
 	so := specOps(t, doc)["countIssues"]
@@ -602,6 +605,7 @@ var countFieldForParameter = map[string]string{
 	"no_assignee":       "NoAssignee",
 	"no_labels":         "NoLabels",
 	"metadata_field":    "MetadataFields",
+	"has_metadata_key":  "HasMetadataKey",
 	"include_infra":     "IncludeInfra",
 	"include_ephemeral": "IncludeEphemeral",
 }
